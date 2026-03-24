@@ -228,7 +228,6 @@ if ! "${skip_training}"; then
         --master_port ${master_port} \
         --python_hf ${python_hf} \
         --inference_batch_size ${inference_batch_size} \
-        --inference_checkpoint checkpoint-4 \
         --use_asr_prompt_decode ${use_asr_prompt_decode} \
         --promptless_decode ${promptless_decode} \
         --disable_asr_inference ${disable_asr_inference} \

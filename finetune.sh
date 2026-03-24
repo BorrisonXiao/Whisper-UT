@@ -43,7 +43,7 @@ preprocessing_num_proc=4     # Number of parallel jobs in preprocessing
 resume_from_checkpoint=      # Resume from checkpoint path
 load_model_from_path=        # Load model from path
 peft_method=none             # none, lora, qlora
-on_the_fly_feat=false        # Whether to generate features on the fly
+on_the_fly_feat=true         # Whether to generate features on the fly
 debug=false                  # Whether to use debug mode
 ds_config=                   # Path to the deepspeed config file
 st_save_eval_preds=          # Path to store the st evaluation predictions for analysis
@@ -72,6 +72,8 @@ num_beams=2                  # Number of beams for decoding
 inference_checkpoint=        # Checkpoint to use for inference
 no_glm=false                 # Whether to skip the GLM evaluation
 score_dir_base=scores        # Base directory for storing the evaluation scores
+score_backend=hf_dataset     # hf_dataset, legacy_covost2
+auto_make_keyfiles=true      # Auto-create wav.scp keyfiles from HF datasets when missing
 
 # Speed perturbation related
 speed_perturb_factors= # perturbation factors, e.g. "0.9 1.0 1.1" (separated by space).
@@ -139,6 +141,57 @@ fi
 
 . ./path.sh
 . ./cmd.sh
+
+ensure_decode_keyfile() {
+    local dset=$1
+    local key_file="${hf_datadir}/${dset}.wav.scp"
+    local hf_dataset="${hf_datadir}/${src_lang}.${dset}"
+
+    if [ -f "${key_file}" ]; then
+        echo "${key_file}"
+        return 0
+    fi
+
+    if ! "${auto_make_keyfiles}"; then
+        log "Error: Missing keyfile ${key_file} and --auto_make_keyfiles is false"
+        exit 2
+    fi
+
+    if [ ! -d "${hf_dataset}" ]; then
+        log "Error: Missing HF dataset ${hf_dataset}, cannot create ${key_file}"
+        exit 2
+    fi
+
+    log "Creating missing keyfile ${key_file} from ${hf_dataset}"
+    ${python_hf} pyscripts/utils/concat_hf_datasets.py \
+        --inputs "${hf_dataset}" \
+        --wav-scp "${key_file}"
+    echo "${key_file}"
+}
+
+run_generic_hf_scoring() {
+    local task=$1
+    local dset=$2
+    local hyp_file=$3
+    local score_dir=$4
+
+    local hf_dataset="${hf_datadir}/${src_lang}.${dset}"
+    if [ ! -d "${hf_dataset}" ]; then
+        log "Error: Missing HF dataset ${hf_dataset} for scoring"
+        exit 2
+    fi
+
+    opts=
+    if "${normalize_text}"; then
+        opts+=" --normalize-text "
+    fi
+
+    ${python_hf} pyscripts/utils/score_hf_predictions.py \
+        --dataset "${hf_dataset}" \
+        --hyp-file "${hyp_file}" \
+        --task "${task}" \
+        --score-dir "${score_dir}" ${opts}
+}
 
 # Check required arguments
 [ -z "${train_set}" ] && {
@@ -396,7 +449,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
             _dir="${_dir}_asr_prompt"
         fi
 
-        key_file=${_dsetdir}/${dset}.wav.scp
+        key_file=$(ensure_decode_keyfile "${dset}")
         # 1. Split the key file
         _nj=$(min "${inference_nj}" "$(wc <${key_file} -l)")
 
@@ -500,8 +553,6 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
                 # for dset in ${valid_set}; do
                 # for dset in ${valid_set} ${test_sets}; do
                 log "Running ASR evaluation on ${dset}"
-                eval_script=run-asr-eval-covost2.sh
-
                 _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
                 if [ -n "${inference_checkpoint}" ]; then
                     _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
@@ -510,13 +561,6 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
                     _dir="${_dir}_asr_prompt"
                 fi
                 _asr_hyp="${PWD}/${_dir}/asr"
-                _dset=$(echo "${dset}" | sed 's/_test$//')
-
-                opts=
-                if [ "${src_lang}" == "ara" ]; then
-                    opts+=" --arabic true "
-                fi
-                opts+=" --cer ${eval_cer} "
 
                 score_dir=${score_dir_base}/mml/asr/hf_whisper_${model_name}/${src_lang}/${peft_method}_${batch_mask_prob}_${token_mask_prob}/${train_set}${train_suf}${decode_suf}/${dset}
                 if "${promptless_decode}"; then
@@ -525,16 +569,29 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
                     score_dir="${score_dir}_asr_prompt"
                 fi
 
-                cd evaluation
-                ${eval_script} \
-                    --src_lang ${src_lang} \
-                    --hyp_asr "${_asr_hyp}" \
-                    --sclite ${sclite_path} \
-                    --dset "${_dset}" \
-                    --score_dir "${score_dir}" \
-                    --data_base_dir "${hf_datadir}" \
-                    --no_glm "${no_glm}" ${opts}
-                cd -
+                if [ "${score_backend}" = "legacy_covost2" ]; then
+                    eval_script=run-asr-eval-covost2.sh
+                    _dset=$(echo "${dset}" | sed 's/_test$//')
+
+                    opts=
+                    if [ "${src_lang}" == "ara" ]; then
+                        opts+=" --arabic true "
+                    fi
+                    opts+=" --cer ${eval_cer} "
+
+                    cd evaluation
+                    ${eval_script} \
+                        --src_lang ${src_lang} \
+                        --hyp_asr "${_asr_hyp}" \
+                        --sclite ${sclite_path} \
+                        --dset "${_dset}" \
+                        --score_dir "${score_dir}" \
+                        --data_base_dir "${hf_datadir}" \
+                        --no_glm "${no_glm}" ${opts}
+                    cd -
+                else
+                    run_generic_hf_scoring asr "${dset}" "${_asr_hyp}" "${score_dir}"
+                fi
             done
         fi
     fi
@@ -542,8 +599,6 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     # Note that we assume the evaluation code is available in the path
     for dset in ${test_sets}; do
         log "Running ST evaluation on ${dset}"
-        eval_script=run-testset-eval-covost2.sh
-
         _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
         if [ -n "${inference_checkpoint}" ]; then
             _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
@@ -554,12 +609,6 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
             _dir="${_dir}_asr_prompt"
         fi
         _st_hyp="${PWD}/${_dir}/st"
-        _dset=$(echo "${dset}" | sed 's/_test$//')
-
-        opts=
-        if [ "${src_lang}" == "ara" ]; then
-            opts+=" --arabic true "
-        fi
 
         score_dir=${score_dir_base}/mml/st/hf_whisper_${model_name}/${src_lang}/${peft_method}_${batch_mask_prob}_${token_mask_prob}/${train_set}${train_suf}${decode_suf}/${dset}
         if "${promptless_decode}"; then
@@ -568,15 +617,27 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
             score_dir="${score_dir}_asr_prompt"
         fi
 
-        cd evaluation
-        ${eval_script} \
-            --src_lang ${src_lang} \
-            --hyp_mt "${_st_hyp}" \
-            --dset "${_dset}" \
-            --score_dir "${score_dir}" \
-            --data_base_dir "${hf_datadir}" \
-            --no_glm "${no_glm}" ${opts}
-        cd -
+        if [ "${score_backend}" = "legacy_covost2" ]; then
+            eval_script=run-testset-eval-covost2.sh
+            _dset=$(echo "${dset}" | sed 's/_test$//')
+
+            opts=
+            if [ "${src_lang}" == "ara" ]; then
+                opts+=" --arabic true "
+            fi
+
+            cd evaluation
+            ${eval_script} \
+                --src_lang ${src_lang} \
+                --hyp_mt "${_st_hyp}" \
+                --dset "${_dset}" \
+                --score_dir "${score_dir}" \
+                --data_base_dir "${hf_datadir}" \
+                --no_glm "${no_glm}" ${opts}
+            cd -
+        else
+            run_generic_hf_scoring st "${dset}" "${_st_hyp}" "${score_dir}"
+        fi
     done
 fi
 
@@ -598,7 +659,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
             _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
 
-        key_file=${_dsetdir}/${dset}.wav.scp
+        key_file=$(ensure_decode_keyfile "${dset}")
         # 1. Split the key file
         _nj=$(min "${inference_nj}" "$(wc <${key_file} -l)")
 
@@ -676,34 +737,37 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     # Note that we assume the evaluation code is available in the path
     for dset in ${test_sets}; do
         log "Running ST evaluation on ${dset}"
-        eval_script=run-testset-eval-covost2.sh
-
         _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
         if [ -n "${inference_checkpoint}" ]; then
             _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
         _st_hyp="${PWD}/${_dir}/text"
-        _dset=$(echo "${dset}" | sed 's/_test$//')
-
-        opts=
-        if [ "${src_lang}" == "ara" ]; then
-            opts+=" --arabic true "
-        fi
 
         score_dir=${score_dir_base}/mml/mt/hf_whisper_${model_name}/${src_lang}/${peft_method}_${batch_mask_prob}_${token_mask_prob}/${train_set}${train_suf}${decode_suf}/${dset}
 
-        if "${no_glm}"; then
-            opts+=" --no-glm true "
-        fi
+        if [ "${score_backend}" = "legacy_covost2" ]; then
+            eval_script=run-testset-eval-covost2.sh
+            _dset=$(echo "${dset}" | sed 's/_test$//')
 
-        cd evaluation
-        ${eval_script} \
-            --src_lang ${src_lang} \
-            --hyp_mt "${_st_hyp}" \
-            --dset "${_dset}" \
-            --data_base_dir "${hf_datadir}" \
-            --score_dir "${score_dir}" ${opts}
-        cd -
+            opts=
+            if [ "${src_lang}" == "ara" ]; then
+                opts+=" --arabic true "
+            fi
+            if "${no_glm}"; then
+                opts+=" --no-glm true "
+            fi
+
+            cd evaluation
+            ${eval_script} \
+                --src_lang ${src_lang} \
+                --hyp_mt "${_st_hyp}" \
+                --dset "${_dset}" \
+                --data_base_dir "${hf_datadir}" \
+                --score_dir "${score_dir}" ${opts}
+            cd -
+        else
+            run_generic_hf_scoring mt "${dset}" "${_st_hyp}" "${score_dir}"
+        fi
     done
 fi
 
@@ -726,7 +790,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
             _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
 
-        key_file=${_dsetdir}/${dset}.wav.scp
+        key_file=$(ensure_decode_keyfile "${dset}")
         # 1. Split the key file
         _nj=$(min "${inference_nj}" "$(wc <${key_file} -l)")
 
@@ -798,19 +862,11 @@ if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
     # Note that we assume the evaluation code is available in the path
     for dset in ${test_sets}; do
         log "Running ST evaluation on ${dset}"
-        eval_script=run-testset-eval-covost2.sh
-
         _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
         if [ -n "${inference_checkpoint}" ]; then
             _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
         _st_hyp="${PWD}/${_dir}/text"
-        _dset=$(echo "${dset}" | sed 's/_test$//')
-
-        opts=
-        if [ "${src_lang}" == "ara" ]; then
-            opts+=" --arabic true "
-        fi
 
         score_dir=${score_dir_base}/mml/e2e_st/hf_whisper_${model_name}/${src_lang}/${peft_method}_${batch_mask_prob}_${token_mask_prob}/${train_set}${train_suf}${decode_suf}/${dset}
         if "${promptless_decode}"; then
@@ -819,18 +875,29 @@ if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
             score_dir="${score_dir}_asr_prompt"
         fi
 
-        if "${no_glm}"; then
-            opts+=" --no-glm true "
-        fi
+        if [ "${score_backend}" = "legacy_covost2" ]; then
+            eval_script=run-testset-eval-covost2.sh
+            _dset=$(echo "${dset}" | sed 's/_test$//')
 
-        cd evaluation
-        ${eval_script} \
-            --src_lang ${src_lang} \
-            --hyp_mt "${_st_hyp}" \
-            --dset "${_dset}" \
-            --data_base_dir "${hf_datadir}" \
-            --score_dir "${score_dir}" ${opts}
-        cd -
+            opts=
+            if [ "${src_lang}" == "ara" ]; then
+                opts+=" --arabic true "
+            fi
+            if "${no_glm}"; then
+                opts+=" --no-glm true "
+            fi
+
+            cd evaluation
+            ${eval_script} \
+                --src_lang ${src_lang} \
+                --hyp_mt "${_st_hyp}" \
+                --dset "${_dset}" \
+                --data_base_dir "${hf_datadir}" \
+                --score_dir "${score_dir}" ${opts}
+            cd -
+        else
+            run_generic_hf_scoring st "${dset}" "${_st_hyp}" "${score_dir}"
+        fi
     done
 fi
 
