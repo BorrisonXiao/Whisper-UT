@@ -1,5 +1,5 @@
 Seq2SeqTrainingArguments:
-  per_device_train_batch_size: 16
+  per_device_train_batch_size: 12
   per_device_eval_batch_size: 20
   gradient_accumulation_steps: 1
   warmup_steps: 500

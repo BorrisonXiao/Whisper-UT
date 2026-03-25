@@ -69,6 +69,7 @@ master_port=29501
 stage=0
 stop_stage=1
 st_tag=iwslt22
+ngpu=8
 
 help_message=$(
     cat <<EOF
@@ -128,6 +129,7 @@ Wrapper options:
   --no_glm true|false
   --num_beams INT
   --master_port INT
+  --ngpu INT
   --conda_env NAME
   --python PYTHON
   --stage INT
@@ -158,7 +160,7 @@ while [ $# -gt 0 ]; do
             printf '%s\n' "${help_message}"
             exit 0
             ;;
-        --hf_datadir|--src_lang|--tgt_lang|--train_3way_set|--train_asr_set|--train_st_set|--train_set|--mt_train_set|--valid_set|--test_sets|--prepare_combined|--prepare_keyfiles|--force_rebuild_combined|--force_rebuild_keyfiles|--on_the_fly_feat|--peft_method|--mtl_config|--model_name|--ds_config|--python_hf|--normalize_text|--speed_perturb_factors|--preprocessing_num_proc|--inference_nj|--use_gpu_inference|--inference_batch_size|--use_asr_prompt|--min_promptless_prob|--max_promptless_prob|--batch_mask_prob|--token_mask_prob|--min_alpha|--max_alpha|--dynamic_loss_start_step|--dynamic_loss_k|--use_asr_prompt_dev|--use_asr_prompt_decode|--promptless_decode|--disable_asr_inference|--no_glm|--num_beams|--master_port|--conda_env|--python|--stage|--stop_stage|--st_tag)
+        --hf_datadir|--src_lang|--tgt_lang|--train_3way_set|--train_asr_set|--train_st_set|--train_set|--mt_train_set|--valid_set|--test_sets|--prepare_combined|--prepare_keyfiles|--force_rebuild_combined|--force_rebuild_keyfiles|--on_the_fly_feat|--peft_method|--mtl_config|--model_name|--ds_config|--python_hf|--normalize_text|--speed_perturb_factors|--preprocessing_num_proc|--inference_nj|--use_gpu_inference|--inference_batch_size|--use_asr_prompt|--min_promptless_prob|--max_promptless_prob|--batch_mask_prob|--token_mask_prob|--min_alpha|--max_alpha|--dynamic_loss_start_step|--dynamic_loss_k|--use_asr_prompt_dev|--use_asr_prompt_decode|--promptless_decode|--disable_asr_inference|--no_glm|--num_beams|--master_port|--ngpu|--conda_env|--python|--stage|--stop_stage|--st_tag)
             require_arg "$1" "${2:-}"
             name=${1#--}
             name=${name//-/_}
@@ -296,6 +298,7 @@ fi
 
 log "Launching finetune.sh with train_set=${train_set}, mt_train_set=${mt_train_set}, valid_set=${valid_set}, test_sets=${test_sets}"
 bash "${repo_root}/finetune.sh" \
+    --ngpu "${ngpu}" \
     --src_lang "${src_lang}" \
     --tgt_lang "${tgt_lang}" \
     --hf_datadir "${hf_datadir}" \

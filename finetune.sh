@@ -286,7 +286,7 @@ if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
             # Submit the feature extraction jobs
             JOBID=$(date +'%Y%m%d%H%M%S')
             log "Submitting MT feature extraction... log: '$(job_log_path "${_logdir}/fe_${JOBID}.log")'"
-            ${cuda_cmd} --hostname '!r5n0*\&!r10n04\&!r10n06' --mem 64G --gpu 1 "${_logdir}"/fe_${JOBID}.log \
+            ${cuda_cmd} --mem 64G --gpu 1 "${_logdir}"/fe_${JOBID}.log \
                 ${python_hf} ${train_tool} \
                 --feat-extraction \
                 --train-set ${mt_train_set} \
@@ -324,7 +324,7 @@ if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
             # Submit the feature extraction jobs
             JOBID=$(date +'%Y%m%d%H%M%S')
             log "Submitting PMTL feature extraction... log: '$(job_log_path "${_logdir}/fe_${JOBID}.log")'"
-            ${cuda_cmd} --hostname '!r5n0*\&!r10n04\&!r10n06' --mem 64G --gpu 1 "${_logdir}"/fe_${JOBID}.log \
+            ${cuda_cmd} --mem 64G --gpu 1 "${_logdir}"/fe_${JOBID}.log \
                 ${python_hf} ${train_tool} \
                 --feat-extraction \
                 --train-set ${train_set} \
@@ -415,9 +415,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
             # NOTE: --*_shape_file doesn't require length information if --batch_type=unsorted,
             #       but it's used only for deciding the sample ids.
             # shellcheck disable=SC2046,SC2086
-            # ${cuda_cmd} --mem 16G --gpu ${ngpu} "${_logdir}"/finetune_${JOBID}.log \
-            # ${cuda_cmd} --hostname 'r9n03' --mem 16G --gpu ${ngpu} "${_logdir}"/finetune_${JOBID}.log \
-            ${cuda_cmd} --hostname '!r5n0*\&!r10n04\&!r10n06\&!r7n01' --mem 16G --gpu ${ngpu} "${_logdir}"/finetune_${JOBID}.log \
+            ${cuda_cmd} --mem 16G --gpu ${ngpu} "${_logdir}"/finetune_${JOBID}.log \
                 ${python_hf} -m torch.distributed.launch --nproc_per_node ${ngpu} --master_port ${master_port} \
                 ${train_tool} \
                 --train-set ${train_set} \
@@ -509,7 +507,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
             # NOTE: --*_shape_file doesn't require length information if --batch_type=unsorted,
             #       but it's used only for deciding the sample ids.
             # shellcheck disable=SC2046,SC2086
-            ${_cmd} --hostname '!r5n0*\&!r10n04\&!r10n06\&!r8n06\&!r9n02\&!r7n01' --mem 16G --gpu ${_gpu} JOB=1:"${_nj}" "${_logdir}"/decode.JOB.log \
+            ${_cmd} --mem 16G --gpu ${_gpu} JOB=1:"${_nj}" "${_logdir}"/decode.JOB.log \
                 ${inference_tool} \
                 --keyfile ${_logdir}/decode.JOB.scp \
                 --src-lang ${src_lang} \
@@ -708,7 +706,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
             # NOTE: --*_shape_file doesn't require length information if --batch_type=unsorted,
             #       but it's used only for deciding the sample ids.
             # shellcheck disable=SC2046,SC2086
-            ${_cmd} --hostname '!r5n0*\&!r10n04\&!r10n06\&!r8n06\&!r9n02\&!r7n01' --mem 16G --gpu ${_gpu} JOB=1:"${_nj}" "${_logdir}"/decode.JOB.log \
+            ${_cmd} --mem 16G --gpu ${_gpu} JOB=1:"${_nj}" "${_logdir}"/decode.JOB.log \
                 ${inference_tool} \
                 --keyfile ${_logdir}/decode.JOB.scp \
                 --src-lang ${src_lang} \
@@ -830,7 +828,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
             # NOTE: --*_shape_file doesn't require length information if --batch_type=unsorted,
             #       but it's used only for deciding the sample ids.
             # shellcheck disable=SC2046,SC2086
-            ${cuda_cmd} --hostname '!r5n0*\&!r10n04\&!r10n06\&!r7n01' --mem 16G --gpu 1 JOB=1:"${_nj}" "${_logdir}"/decode.JOB.log \
+            ${cuda_cmd} --mem 16G --gpu 1 JOB=1:"${_nj}" "${_logdir}"/decode.JOB.log \
                 ${inference_tool} \
                 --keyfile ${_logdir}/decode.JOB.scp \
                 --src-lang ${src_lang} \

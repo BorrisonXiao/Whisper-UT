@@ -1,10 +1,8 @@
 #!/usr/bin/env python
-import os
-import logging
-from typing import List, Tuple, Dict
-from datasets import load_from_disk, concatenate_datasets, load_dataset
 import argparse
 from pathlib import Path
+
+from datasets import concatenate_datasets, load_from_disk
 
 
 def main():
@@ -21,10 +19,10 @@ def main():
     print(f"dataset2: {args.dset2}")
     print(f"output: {args.output}")
     
-    ds1 = load_from_disk(args.dset1)
-    ds2 = load_from_disk(args.dset2)
+    ds1 = load_from_disk(str(args.dset1))
+    ds2 = load_from_disk(str(args.dset2))
     ds = concatenate_datasets([ds1, ds2])
-    ds.save_to_disk(args.output)
+    ds.save_to_disk(str(args.output))
 
 
 if __name__ == "__main__":
