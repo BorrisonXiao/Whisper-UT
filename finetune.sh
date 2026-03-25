@@ -29,13 +29,8 @@ sclite_path=sclite
 stage=1                      # Processes starts from the specified stage.
 stop_stage=10000             # Processes is stopped at the specified stage.
 ngpu=1                       # The number of gpus ("0" uses cpu, otherwise use gpu).
-num_nodes=1                  # The number of nodes.
-nj=32                        # The number of parallel jobs.
 inference_nj=32              # The number of parallel jobs in decoding.
-gpu_inference=false          # Whether to perform gpu decoding.
-dumpdir=dump                 # Directory to dump features.
 expdir=exp                   # Directory to save experiments.
-python=python3               # Specify python to execute espnet commands.
 model_name=base              # Model name, e.g. "base", "large", etc.
 framework=huggingface        # huggingface, openai
 hf_datadir=                  # Directory to the hugging face dataset.
@@ -75,6 +70,13 @@ score_dir_base=scores        # Base directory for storing the evaluation scores
 score_backend=hf_dataset     # hf_dataset, legacy_covost2
 auto_make_keyfiles=true      # Auto-create wav.scp keyfiles from HF datasets when missing
 
+# Legacy compatibility options kept so older wrappers do not break.
+num_nodes=1
+nj=32
+gpu_inference=false
+dumpdir=dump
+python=python3
+
 # Speed perturbation related
 speed_perturb_factors= # perturbation factors, e.g. "0.9 1.0 1.1" (separated by space).
 
@@ -101,13 +103,8 @@ Options:
     --stage          # Processes starts from the specified stage (default="${stage}").
     --stop_stage     # Processes is stopped at the specified stage (default="${stop_stage}").
     --ngpu           # The number of gpus ("0" uses cpu, otherwise use gpu, default="${ngpu}").
-    --num_nodes      # The number of nodes (default="${num_nodes}").
-    --nj             # The number of parallel jobs (default="${nj}").
     --inference_nj   # The number of parallel jobs in decoding (default="${inference_nj}").
-    --gpu_inference  # Whether to perform gpu decoding (default="${gpu_inference}").
-    --dumpdir        # Directory to dump features (default="${dumpdir}").
     --expdir         # Directory to save experiments (default="${expdir}").
-    --python         # Specify python to execute espnet commands (default="${python}").
 
     # Speed perturbation related
     --speed_perturb_factors # speed perturbation factors, e.g. "0.9 1.0 1.1" (separated by space, default="${speed_perturb_factors}").
@@ -118,7 +115,6 @@ Options:
                        # If this option is specified, st_tag is ignored (default="${st_exp}").
     --src_lang=        # source language abbrev. id (e.g., es). (default="${src_lang}")
     --tgt_lang=        # target language abbrev. id (e.g., en). (default="${tgt_lang}")
-    --use_src_lang=    # Incorporate ASR loss (use src texts) or not 
     
     # [Task dependent] Set the datadir name created by local/data.sh
     --train_set     # Name of training set (required).
@@ -141,6 +137,29 @@ fi
 
 . ./path.sh
 . ./cmd.sh
+
+append_opt() {
+    local -n target_ref=$1
+    local flag=$2
+    local value=${3:-}
+    if [ -n "${value}" ]; then
+        target_ref+=" ${flag} ${value} "
+    fi
+}
+
+append_flag() {
+    local -n target_ref=$1
+    local flag=$2
+    local enabled=$3
+    if "${enabled}"; then
+        target_ref+=" ${flag} "
+    fi
+}
+
+job_log_path() {
+    local log_path=$1
+    echo "${PWD}/${log_path}"
+}
 
 ensure_decode_keyfile() {
     local dset=$1
@@ -174,6 +193,7 @@ run_generic_hf_scoring() {
     local dset=$2
     local hyp_file=$3
     local score_dir=$4
+    local opts=
 
     local hf_dataset="${hf_datadir}/${src_lang}.${dset}"
     if [ ! -d "${hf_dataset}" ]; then
@@ -181,7 +201,6 @@ run_generic_hf_scoring() {
         exit 2
     fi
 
-    opts=
     if "${normalize_text}"; then
         opts+=" --normalize-text "
     fi
@@ -223,31 +242,38 @@ _feat_type=feats
 if "${on_the_fly_feat}"; then
     _feat_type=raw
 fi
+feature_root="${hf_datadir}/features/${_feat_type}"
+train_tag="${peft_method}_${batch_mask_prob}_${token_mask_prob}"
 
 # ========================== Main stages start from here. ==========================
 
 if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
     log "Stage 0: Create the MT data and ASR/ST data separately and concatenate them."
 
-    _dir="${st_exp}/${src_lang}/${train_set}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}"
+    _dir="${st_exp}/${src_lang}/${train_set}/mml/${train_tag}"
     _logdir="${_dir}/logdir"
     mkdir -p "${_logdir}"
     train_tool="pyscripts/utils/hf_whisper_ft.py"
+    mt_train_feat_dir="${feature_root}/${src_lang}.${mt_train_set}.mt"
+    mt_valid_feat_dir="${feature_root}/${src_lang}.${valid_set}.mt"
+    pmtl_train_feat_dir="${feature_root}/${src_lang}.${train_set}.pmtl"
+    pmtl_valid_feat_dir="${feature_root}/${src_lang}.${valid_set}.pmtl"
+    combined_mml_dir="${feature_root}/${src_lang}.${train_set}.${mt_train_set}.mml"
+    train_mml_dir="${feature_root}/${src_lang}.${train_set}.mml"
+    valid_mml_dir="${feature_root}/${src_lang}.${valid_set}.mml"
     # Step 1: Create the MT dataset from the original data
     # If the feature is already extracted in previous runs, skip this step
-    if [ ! -d "${hf_datadir}/features/${_feat_type}/${src_lang}.${mt_train_set}.mt" ] ||
-        [ ! -d "${hf_datadir}/features/${_feat_type}/${src_lang}.${valid_set}.mt" ]; then
+    if [ ! -d "${mt_train_feat_dir}" ] || [ ! -d "${mt_valid_feat_dir}" ]; then
 
         opts=" --mode mt "
-        opts+=" --hf_datadir ${hf_datadir} "
+        append_opt opts --hf_datadir "${hf_datadir}"
         if "${debug}"; then
-            opts+=" --preprocessing_num_proc 1 "
+            append_opt opts --preprocessing_num_proc 1
         else
-            opts+=" --preprocessing_num_proc ${preprocessing_num_proc} "
+            append_opt opts --preprocessing_num_proc "${preprocessing_num_proc}"
         fi
-        opts+=" --dev-name ${valid_set} "
-        opts+=" --save_feature_dir ${hf_datadir}/features/${_feat_type} "
-        log "${hf_datadir}/features/${_feat_type}/${src_lang}.${mt_train_set}.mt or ${hf_datadir}/features/${_feat_type}/${src_lang}.${valid_set}.mt does not exist..."
+        append_opt opts --dev-name "${valid_set}"
+        append_opt opts --save_feature_dir "${feature_root}"
         if "${debug}"; then
             ${python_hf} ${train_tool} \
                 --feat-extraction \
@@ -255,13 +281,11 @@ if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
                 --src-lang ${src_lang} \
                 --tgt-lang ${tgt_lang} \
                 --output_dir ${_dir} \
-                --speed-perturb-factors "${speed_perturb_factors}" \
                 --model_name ${model_name} ${opts}
         else
             # Submit the feature extraction jobs
             JOBID=$(date +'%Y%m%d%H%M%S')
-            log "${hf_datadir}/features/${_feat_type}/${src_lang}.${mt_train_set}.mt or ${hf_datadir}/features/${_feat_type}/${src_lang}.${valid_set}.mt does not exist..."
-            log "Feature extraction started... log: '${PWD}/${_logdir}/fe_${JOBID}.log'"
+            log "Submitting MT feature extraction... log: '$(job_log_path "${_logdir}/fe_${JOBID}.log")'"
             ${cuda_cmd} --hostname '!r5n0*\&!r10n04\&!r10n06' --mem 64G --gpu 1 "${_logdir}"/fe_${JOBID}.log \
                 ${python_hf} ${train_tool} \
                 --feat-extraction \
@@ -269,27 +293,25 @@ if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
                 --src-lang ${src_lang} \
                 --tgt-lang ${tgt_lang} \
                 --output_dir ${_dir} \
-                --speed-perturb-factors "${speed_perturb_factors}" \
                 --model_name ${model_name} ${opts}
         fi
+    else
+        log "Skipping MT feature extraction: found ${mt_train_feat_dir} and ${mt_valid_feat_dir}"
     fi
     # Step 2: Create the ASR/ST dataset
-    if [ ! -d "${hf_datadir}/features/${_feat_type}/${src_lang}.${train_set}.pmtl" ] ||
-        [ ! -d "${hf_datadir}/features/${_feat_type}/${src_lang}.${valid_set}.pmtl" ]; then
+    if [ ! -d "${pmtl_train_feat_dir}" ] || [ ! -d "${pmtl_valid_feat_dir}" ]; then
 
         opts=" --mode pmtl "
-        opts+=" --hf_datadir ${hf_datadir} "
+        append_opt opts --hf_datadir "${hf_datadir}"
         if "${debug}"; then
-            opts+=" --preprocessing_num_proc 1 "
+            append_opt opts --preprocessing_num_proc 1
         else
-            opts+=" --preprocessing_num_proc ${preprocessing_num_proc} "
+            append_opt opts --preprocessing_num_proc "${preprocessing_num_proc}"
         fi
-        if "${on_the_fly_feat}"; then
-            opts+=" --on-the-fly-feat-extraction "
-        fi
-        opts+=" --dev-name ${valid_set} "
-        opts+=" --save_feature_dir ${hf_datadir}/features/${_feat_type} "
-        log "${hf_datadir}/features/${_feat_type}/${src_lang}.${train_set}.pmtl or ${hf_datadir}/features/${_feat_type}/${src_lang}.${valid_set}.pmtl does not exist..."
+        append_flag opts --on-the-fly-feat-extraction "${on_the_fly_feat}"
+        append_opt opts --dev-name "${valid_set}"
+        append_opt opts --save_feature_dir "${feature_root}"
+        append_opt opts --speed-perturb-factors "${speed_perturb_factors}"
         if "${debug}"; then
             ${python_hf} ${train_tool} \
                 --feat-extraction \
@@ -297,13 +319,11 @@ if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
                 --src-lang ${src_lang} \
                 --tgt-lang ${tgt_lang} \
                 --output_dir ${_dir} \
-                --speed-perturb-factors "${speed_perturb_factors}" \
                 --model_name ${model_name} ${opts}
         else
             # Submit the feature extraction jobs
             JOBID=$(date +'%Y%m%d%H%M%S')
-            log "${hf_datadir}/features/${_feat_type}/${src_lang}.${train_set}.pmtl or ${hf_datadir}/features/${_feat_type}/${src_lang}.${valid_set}.pmtl does not exist..."
-            log "Feature extraction started... log: '${PWD}/${_logdir}/fe_${JOBID}.log'"
+            log "Submitting PMTL feature extraction... log: '$(job_log_path "${_logdir}/fe_${JOBID}.log")'"
             ${cuda_cmd} --hostname '!r5n0*\&!r10n04\&!r10n06' --mem 64G --gpu 1 "${_logdir}"/fe_${JOBID}.log \
                 ${python_hf} ${train_tool} \
                 --feat-extraction \
@@ -311,95 +331,77 @@ if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
                 --src-lang ${src_lang} \
                 --tgt-lang ${tgt_lang} \
                 --output_dir ${_dir} \
-                --speed-perturb-factors "${speed_perturb_factors}" \
                 --model_name ${model_name} ${opts}
         fi
+    else
+        log "Skipping PMTL feature extraction: found ${pmtl_train_feat_dir} and ${pmtl_valid_feat_dir}"
     fi
 
     # Step 3: Concatenate the MT and ASR/ST data
-    ln -sfv ${hf_datadir}/features/${_feat_type}/${src_lang}.${valid_set}.pmtl ${hf_datadir}/features/${_feat_type}/${src_lang}.${valid_set}.mml
+    if [ -d "${combined_mml_dir}" ]; then
+        log "Skipping MML concatenation: found ${combined_mml_dir}"
+    else
+        log "Creating concatenated MML features at ${combined_mml_dir}"
+        # ${cuda_cmd} JOB=1:1 "${_logdir}"/concatenate_features.log \
+        ${python_hf} pyscripts/utils/concatenate_features.py \
+            --dset1 "${pmtl_train_feat_dir}" \
+            --dset2 "${mt_train_feat_dir}" \
+            --output "${combined_mml_dir}"
+    fi
 
-    # ${cuda_cmd} JOB=1:1 "${_logdir}"/concatenate_features.log \
-    ${python_hf} pyscripts/utils/concatenate_features.py \
-        --dset1 ${hf_datadir}/features/${_feat_type}/${src_lang}.${train_set}.pmtl \
-        --dset2 ${hf_datadir}/features/${_feat_type}/${src_lang}.${mt_train_set}.mt \
-        --output ${hf_datadir}/features/${_feat_type}/${src_lang}.${train_set}.${mt_train_set}.mml
-
-    ln -sfv ${hf_datadir}/features/${_feat_type}/${src_lang}.${train_set}.${mt_train_set}.mml ${hf_datadir}/features/${_feat_type}/${src_lang}.${train_set}.mml
+    ln -sfnv "${pmtl_valid_feat_dir}" "${valid_mml_dir}"
+    ln -sfnv "${combined_mml_dir}" "${train_mml_dir}"
 fi
 
 if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     log "Stage 1: Run the multi-modal finetuning on the training data"
-    _dir="${st_exp}/${src_lang}/${train_set}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}"
+    _dir="${st_exp}/${src_lang}/${train_set}/mml/${train_tag}"
     _logdir="${_dir}/logdir"
     mkdir -p "${_logdir}"
 
     opts=" --mode mml "
     if [ "${framework}" == "huggingface" ]; then
-        opts+=" --hf_datadir ${hf_datadir} "
+        append_opt opts --hf_datadir "${hf_datadir}"
         if "${debug}"; then
-            opts+=" --preprocessing_num_proc 1 "
+            append_opt opts --preprocessing_num_proc 1
         else
-            opts+=" --preprocessing_num_proc ${preprocessing_num_proc} "
+            append_opt opts --preprocessing_num_proc "${preprocessing_num_proc}"
         fi
-        opts+=" --dev-name ${valid_set} "
-
-        if [ -n "${mtl_config}" ]; then
-            opts+=" --config ${mtl_config} "
-        fi
-
+        append_opt opts --dev-name "${valid_set}"
+        append_opt opts --config "${mtl_config}"
         if [ "${peft_method}" != none ]; then
-            opts+=" --peft_method ${peft_method} "
+            append_opt opts --peft_method "${peft_method}"
         fi
-
-        if "${on_the_fly_feat}"; then
-            opts+=" --on-the-fly-feat-extraction "
-        fi
-
-        if "${normalize_text}"; then
-            opts+=" --normalize_text "
-        fi
-
-        opts+=" --save_feature_dir ${hf_datadir}/features/${_feat_type} "
+        append_flag opts --on-the-fly-feat-extraction "${on_the_fly_feat}"
+        append_flag opts --normalize_text "${normalize_text}"
+        append_opt opts --save_feature_dir "${feature_root}"
 
         train_tool="pyscripts/utils/hf_whisper_ft.py"
     else
         log "Error: not supported --framework ${framework}"
         exit 2
     fi
-    if [ -n "${resume_from_checkpoint}" ]; then
-        opts+=" --resume_from_checkpoint ${resume_from_checkpoint} "
-    fi
-    if [ -n "${load_model_from_path}" ]; then
-        opts+=" --load_model_from_path ${load_model_from_path} "
-    fi
-    if [ -n "${ds_config}" ]; then
-        opts+=" --deepspeed ${ds_config} "
-    fi
-    if [ -n "${st_save_eval_preds}" ]; then
-        opts+=" --save-eval-preds ${st_save_eval_preds} "
-    fi
-    if "${use_asr_prompt}"; then
-        opts+=" --use-asr-prompt "
-    fi
-    if "${use_asr_prompt_dev}"; then
-        opts+=" --use-asr-prompt-dev "
-    fi
-    opts+=" --min-promptless-prob ${min_promptless_prob} "
-    opts+=" --max-promptless-prob ${max_promptless_prob} "
-    opts+=" --batch-mask-prob ${batch_mask_prob} "
-    opts+=" --token-mask-prob ${token_mask_prob} "
-    opts+=" --min-alpha ${min_alpha} "
-    opts+=" --max-alpha ${max_alpha} "
-    opts+=" --loss-warmup ${dynamic_loss_start_step} "
-    opts+=" --loss-base ${dynamic_loss_k} "
+    append_opt opts --resume_from_checkpoint "${resume_from_checkpoint}"
+    append_opt opts --load_model_from_path "${load_model_from_path}"
+    append_opt opts --deepspeed "${ds_config}"
+    append_opt opts --save-eval-preds "${st_save_eval_preds}"
+    append_flag opts --use-asr-prompt "${use_asr_prompt}"
+    append_flag opts --use-asr-prompt-dev "${use_asr_prompt_dev}"
+    append_opt opts --min-promptless-prob "${min_promptless_prob}"
+    append_opt opts --max-promptless-prob "${max_promptless_prob}"
+    append_opt opts --batch-mask-prob "${batch_mask_prob}"
+    append_opt opts --token-mask-prob "${token_mask_prob}"
+    append_opt opts --min-alpha "${min_alpha}"
+    append_opt opts --max-alpha "${max_alpha}"
+    append_opt opts --loss-warmup "${dynamic_loss_start_step}"
+    append_opt opts --loss-base "${dynamic_loss_k}"
 
     if "${fe_only}"; then
         log "Skip training as --fe_only is set to true"
     else
         # Submit the training jobs
         JOBID=$(date +'%Y%m%d%H%M%S')
-        log "Training started... log: '${PWD}/${_logdir}/finetune_${JOBID}.log'"
+        log "Submitting training... log: '$(job_log_path "${_logdir}/finetune_${JOBID}.log")'"
 
         if "${debug}"; then
             ${python_hf} ${train_tool} \
@@ -435,13 +437,11 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
         _logdir="${st_exp}/logdir/inference_mml/${src_lang}/${train_set}/${dset}/${peft_method}${train_suf}${decode_suf}"
         mkdir -p "${_logdir}"
 
-        _dsetdir=${hf_datadir}
-
-        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
-        _modeldir="${st_exp}/${src_lang}/${train_set}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}"
+        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${train_tag}${train_suf}${decode_suf}"
+        _modeldir="${st_exp}/${src_lang}/${train_set}/mml/${train_tag}"
         if [ -n "${inference_checkpoint}" ]; then
             _modeldir="${_modeldir}/${inference_checkpoint}"
-            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
+            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${train_tag}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
         if "${promptless_decode}"; then
             _dir="${_dir}_promptless"
@@ -461,7 +461,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
         utils/split_scp.pl "${key_file}" ${split_scps}
 
         # 2. Submit jobs
-        log "Inference started... log: '${PWD}/${_logdir}/decode.*.log'"
+        log "Submitting MML inference for ${dset}... log: '$(job_log_path "${_logdir}/decode.*.log")'"
 
         opts=
         _hf_dset="${hf_datadir}/${src_lang}.${dset}"
@@ -500,7 +500,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
             ${inference_tool} \
                 --keyfile ${_logdir}/decode.1.scp \
                 --src-lang ${src_lang} \
-                --tgt-lang ${src_lang} \
+                --tgt-lang ${tgt_lang} \
                 --output_dir ${_logdir}/output.1 \
                 --pretrained-model ${_modeldir} \
                 --batch-size ${inference_batch_size} \
@@ -513,7 +513,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
                 ${inference_tool} \
                 --keyfile ${_logdir}/decode.JOB.scp \
                 --src-lang ${src_lang} \
-                --tgt-lang ${src_lang} \
+                --tgt-lang ${tgt_lang} \
                 --output_dir ${_logdir}/output.JOB \
                 --pretrained-model ${_modeldir} \
                 --batch-size ${inference_batch_size} \
@@ -553,16 +553,16 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
                 # for dset in ${valid_set}; do
                 # for dset in ${valid_set} ${test_sets}; do
                 log "Running ASR evaluation on ${dset}"
-                _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
+                _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${train_tag}${train_suf}${decode_suf}"
                 if [ -n "${inference_checkpoint}" ]; then
-                    _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
+                    _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${train_tag}_${inference_checkpoint}${train_suf}${decode_suf}"
                 fi
                 if "${use_asr_prompt_decode}"; then
                     _dir="${_dir}_asr_prompt"
                 fi
                 _asr_hyp="${PWD}/${_dir}/asr"
 
-                score_dir=${score_dir_base}/mml/asr/hf_whisper_${model_name}/${src_lang}/${peft_method}_${batch_mask_prob}_${token_mask_prob}/${train_set}${train_suf}${decode_suf}/${dset}
+                score_dir=${score_dir_base}/mml/asr/hf_whisper_${model_name}/${src_lang}/${train_tag}/${train_set}${train_suf}${decode_suf}/${dset}
                 if "${promptless_decode}"; then
                     score_dir="${score_dir}_promptless"
                 elif "${use_asr_prompt_decode}"; then
@@ -599,9 +599,9 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     # Note that we assume the evaluation code is available in the path
     for dset in ${test_sets}; do
         log "Running ST evaluation on ${dset}"
-        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
+        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${train_tag}${train_suf}${decode_suf}"
         if [ -n "${inference_checkpoint}" ]; then
-            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
+            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/${train_tag}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
         if "${promptless_decode}"; then
             _dir="${_dir}_promptless"
@@ -610,7 +610,7 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
         fi
         _st_hyp="${PWD}/${_dir}/st"
 
-        score_dir=${score_dir_base}/mml/st/hf_whisper_${model_name}/${src_lang}/${peft_method}_${batch_mask_prob}_${token_mask_prob}/${train_set}${train_suf}${decode_suf}/${dset}
+        score_dir=${score_dir_base}/mml/st/hf_whisper_${model_name}/${src_lang}/${train_tag}/${train_set}${train_suf}${decode_suf}/${dset}
         if "${promptless_decode}"; then
             score_dir="${score_dir}_promptless"
         elif "${use_asr_prompt_decode}"; then
@@ -649,14 +649,13 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     for dset in ${test_sets}; do
         _logdir="${st_exp}/logdir/inference_mml/mt/${src_lang}/${train_set}/${dset}/${peft_method}${train_suf}${decode_suf}"
         mkdir -p "${_logdir}"
-        _dsetdir=${hf_datadir}
 
-        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
-        _modeldir="${st_exp}/${src_lang}/${train_set}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}"
+        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${train_tag}${train_suf}${decode_suf}"
+        _modeldir="${st_exp}/${src_lang}/${train_set}/mml/${train_tag}"
 
         if [ -n "${inference_checkpoint}" ]; then
             _modeldir="${_modeldir}/${inference_checkpoint}"
-            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
+            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${train_tag}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
 
         key_file=$(ensure_decode_keyfile "${dset}")
@@ -671,7 +670,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         utils/split_scp.pl "${key_file}" ${split_scps}
 
         # 2. Submit jobs
-        log "Inference started... log: '${PWD}/${_logdir}/decode.*.log'"
+        log "Submitting MT inference for ${dset}... log: '$(job_log_path "${_logdir}/decode.*.log")'"
 
         opts=
         _hf_dset="${hf_datadir}/${src_lang}.${dset}"
@@ -700,7 +699,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
             ${inference_tool} \
                 --keyfile ${_logdir}/decode.1.scp \
                 --src-lang ${src_lang} \
-                --tgt-lang ${src_lang} \
+                --tgt-lang ${tgt_lang} \
                 --output_dir ${_logdir}/output.1 \
                 --pretrained-model ${_modeldir} \
                 --batch-size ${inference_batch_size} \
@@ -713,7 +712,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
                 ${inference_tool} \
                 --keyfile ${_logdir}/decode.JOB.scp \
                 --src-lang ${src_lang} \
-                --tgt-lang ${src_lang} \
+                --tgt-lang ${tgt_lang} \
                 --output_dir ${_logdir}/output.JOB \
                 --pretrained-model ${_modeldir} \
                 --batch-size ${inference_batch_size} \
@@ -736,14 +735,14 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
 
     # Note that we assume the evaluation code is available in the path
     for dset in ${test_sets}; do
-        log "Running ST evaluation on ${dset}"
-        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
+        log "Running MT evaluation on ${dset}"
+        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${train_tag}${train_suf}${decode_suf}"
         if [ -n "${inference_checkpoint}" ]; then
-            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
+            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/mt/${train_tag}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
         _st_hyp="${PWD}/${_dir}/text"
 
-        score_dir=${score_dir_base}/mml/mt/hf_whisper_${model_name}/${src_lang}/${peft_method}_${batch_mask_prob}_${token_mask_prob}/${train_set}${train_suf}${decode_suf}/${dset}
+        score_dir=${score_dir_base}/mml/mt/hf_whisper_${model_name}/${src_lang}/${train_tag}/${train_set}${train_suf}${decode_suf}/${dset}
 
         if [ "${score_backend}" = "legacy_covost2" ]; then
             eval_script=run-testset-eval-covost2.sh
@@ -780,14 +779,12 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
         _logdir="${st_exp}/logdir/inference_mml/st/${src_lang}/${train_set}/${dset}/${peft_method}${train_suf}${decode_suf}"
         mkdir -p "${_logdir}"
 
-        _dsetdir=${hf_datadir}
-
-        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
-        _modeldir="${st_exp}/${src_lang}/${train_set}/mml/${peft_method}_${batch_mask_prob}_${token_mask_prob}"
+        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${train_tag}${train_suf}${decode_suf}"
+        _modeldir="${st_exp}/${src_lang}/${train_set}/mml/${train_tag}"
 
         if [ -n "${inference_checkpoint}" ]; then
             _modeldir="${_modeldir}/${inference_checkpoint}"
-            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
+            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${train_tag}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
 
         key_file=$(ensure_decode_keyfile "${dset}")
@@ -802,7 +799,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
         utils/split_scp.pl "${key_file}" ${split_scps}
 
         # 2. Submit jobs
-        log "Inference started... log: '${_logdir}/decode.*.log'"
+        log "Submitting ST inference for ${dset}... log: '$(job_log_path "${_logdir}/decode.*.log")'"
 
         opts=
         if [ "${framework}" == "huggingface" ]; then
@@ -823,7 +820,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
             ${inference_tool} \
                 --keyfile ${_logdir}/decode.1.scp \
                 --src-lang ${src_lang} \
-                --tgt-lang ${src_lang} \
+                --tgt-lang ${tgt_lang} \
                 --output_dir ${_logdir}/output.1 \
                 --pretrained-model ${_modeldir} \
                 --batch-size ${inference_batch_size} \
@@ -837,7 +834,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
                 ${inference_tool} \
                 --keyfile ${_logdir}/decode.JOB.scp \
                 --src-lang ${src_lang} \
-                --tgt-lang ${src_lang} \
+                --tgt-lang ${tgt_lang} \
                 --output_dir ${_logdir}/output.JOB \
                 --pretrained-model ${_modeldir} \
                 --batch-size ${inference_batch_size} \
@@ -862,13 +859,13 @@ if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
     # Note that we assume the evaluation code is available in the path
     for dset in ${test_sets}; do
         log "Running ST evaluation on ${dset}"
-        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${peft_method}_${batch_mask_prob}_${token_mask_prob}${train_suf}${decode_suf}"
+        _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${train_tag}${train_suf}${decode_suf}"
         if [ -n "${inference_checkpoint}" ]; then
-            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${peft_method}_${batch_mask_prob}_${token_mask_prob}_${inference_checkpoint}${train_suf}${decode_suf}"
+            _dir="${st_exp}/${src_lang}/decode/${train_set}/${dset}/mml/st/${train_tag}_${inference_checkpoint}${train_suf}${decode_suf}"
         fi
         _st_hyp="${PWD}/${_dir}/text"
 
-        score_dir=${score_dir_base}/mml/e2e_st/hf_whisper_${model_name}/${src_lang}/${peft_method}_${batch_mask_prob}_${token_mask_prob}/${train_set}${train_suf}${decode_suf}/${dset}
+        score_dir=${score_dir_base}/mml/e2e_st/hf_whisper_${model_name}/${src_lang}/${train_tag}/${train_set}${train_suf}${decode_suf}/${dset}
         if "${promptless_decode}"; then
             score_dir="${score_dir}_promptless"
         elif "${use_asr_prompt_decode}"; then

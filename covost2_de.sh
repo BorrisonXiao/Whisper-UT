@@ -233,5 +233,6 @@ if ! "${skip_training}"; then
         --disable_asr_inference ${disable_asr_inference} \
         --use_asr_prompt_dev ${use_asr_prompt_dev} \
         --num_beams 1 \
+        --score_backend legacy_covost2 \
         --score_dir_base scores/covost2 ${opts}
 fi

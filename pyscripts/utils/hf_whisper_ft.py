@@ -242,12 +242,16 @@ def prepare_dataset(
 
                 dset = dset.select(list(valid_indices))
 
-                # Apply speed perturbation if specified
-                if speed_perturb_factors is not None and "train" in dset_type:
+                # Apply speed perturbation only when a non-empty factor list is provided.
+                if isinstance(speed_perturb_factors, str):
+                    factor_list = speed_perturb_factors.split()
+                else:
+                    factor_list = speed_perturb_factors or []
+                if factor_list and "train" in dset_type:
                     import librosa
 
                     perturbed_sets = []
-                    for factor in speed_perturb_factors.split():
+                    for factor in factor_list:
                         print(f"Speed perturbation factor: {factor}")
                         if factor == "1.0":
                             perturbed_sets.append(dset)
@@ -268,7 +272,7 @@ def prepare_dataset(
                                 num_proc=min(
                                     preprocessing_num_proc, os.cpu_count()),
                                 desc=f"Speed perturbation {factor}")
-                        perturbed_sets.append(perturbed_dset)
+                            perturbed_sets.append(perturbed_dset)
                     dset = concatenate_datasets(perturbed_sets)
 
             processed_dset = dset.map(_prepare_dataset,
@@ -920,8 +924,8 @@ def main():
                         help="Number of steps to warm up the loss weight for the PMTL training.")
     parser.add_argument("--loss-base", type=float, default=.25,
                         help="Base for the log-increase ST weight, larger means slower increases.")
-    parser.add_argument("--speed-perturb-factors", type=str, default=None,
-                        help="Comma-separated list of speed perturbation factors to use for data augmentation, e.g. '0.9,1.0,1.1'")
+    parser.add_argument("--speed-perturb-factors", type=str, nargs="+", default=None,
+                        help="List of speed perturbation factors to use for data augmentation, e.g. 0.9 1.0 1.1")
     parser.add_argument("--eval-steps", type=int, default=20,
                         help="Number of maximum steps for each evaluation during training")
 

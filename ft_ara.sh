@@ -37,10 +37,38 @@ prepare_combined=true
 prepare_keyfiles=true
 force_rebuild_combined=false
 force_rebuild_keyfiles=false
+on_the_fly_feat=true
+peft_method=lora
+mtl_config=conf/tuning/mtl_large-v2_ara_lora_train_all_merged.yaml
+model_name=large-v2
+ds_config=conf/tuning/ds2.json
+python_hf=python3
+normalize_text=false
+speed_perturb_factors="0.9 1.0 1.1"
+preprocessing_num_proc=32
+inference_nj=4
+use_gpu_inference=true
+inference_batch_size=16
+use_asr_prompt=true
+min_promptless_prob=0.1
+max_promptless_prob=0.1
+batch_mask_prob=0.8
+token_mask_prob=0.4
+min_alpha=0.4
+max_alpha=0.5
+dynamic_loss_start_step=1
+dynamic_loss_k=0.25
+use_asr_prompt_dev=false
+use_asr_prompt_decode=true
+promptless_decode=false
+disable_asr_inference=false
+no_glm=true
+num_beams=1
+master_port=29501
 
 stage=0
 stop_stage=1
-st_tag=whisper_ut_ara_all
+st_tag=iwslt22
 
 help_message=$(
     cat <<EOF
@@ -72,6 +100,34 @@ Wrapper options:
   --prepare_keyfiles true|false
   --force_rebuild_combined true|false
   --force_rebuild_keyfiles true|false
+  --on_the_fly_feat true|false
+  --peft_method METHOD
+  --mtl_config PATH
+  --model_name NAME
+  --ds_config PATH
+  --python_hf PYTHON
+  --normalize_text true|false
+  --speed_perturb_factors "FACTORS"
+  --preprocessing_num_proc INT
+  --inference_nj INT
+  --use_gpu_inference true|false
+  --inference_batch_size INT
+  --use_asr_prompt true|false
+  --min_promptless_prob FLOAT
+  --max_promptless_prob FLOAT
+  --batch_mask_prob FLOAT
+  --token_mask_prob FLOAT
+  --min_alpha FLOAT
+  --max_alpha FLOAT
+  --dynamic_loss_start_step INT
+  --dynamic_loss_k FLOAT
+  --use_asr_prompt_dev true|false
+  --use_asr_prompt_decode true|false
+  --promptless_decode true|false
+  --disable_asr_inference true|false
+  --no_glm true|false
+  --num_beams INT
+  --master_port INT
   --conda_env NAME
   --python PYTHON
   --stage INT
@@ -102,7 +158,7 @@ while [ $# -gt 0 ]; do
             printf '%s\n' "${help_message}"
             exit 0
             ;;
-        --hf_datadir|--src_lang|--tgt_lang|--train_3way_set|--train_asr_set|--train_st_set|--train_set|--mt_train_set|--valid_set|--test_sets|--prepare_combined|--prepare_keyfiles|--force_rebuild_combined|--force_rebuild_keyfiles|--conda_env|--python|--stage|--stop_stage|--st_tag)
+        --hf_datadir|--src_lang|--tgt_lang|--train_3way_set|--train_asr_set|--train_st_set|--train_set|--mt_train_set|--valid_set|--test_sets|--prepare_combined|--prepare_keyfiles|--force_rebuild_combined|--force_rebuild_keyfiles|--on_the_fly_feat|--peft_method|--mtl_config|--model_name|--ds_config|--python_hf|--normalize_text|--speed_perturb_factors|--preprocessing_num_proc|--inference_nj|--use_gpu_inference|--inference_batch_size|--use_asr_prompt|--min_promptless_prob|--max_promptless_prob|--batch_mask_prob|--token_mask_prob|--min_alpha|--max_alpha|--dynamic_loss_start_step|--dynamic_loss_k|--use_asr_prompt_dev|--use_asr_prompt_decode|--promptless_decode|--disable_asr_inference|--no_glm|--num_beams|--master_port|--conda_env|--python|--stage|--stop_stage|--st_tag)
             require_arg "$1" "${2:-}"
             name=${1#--}
             name=${name//-/_}
@@ -243,6 +299,34 @@ bash "${repo_root}/finetune.sh" \
     --src_lang "${src_lang}" \
     --tgt_lang "${tgt_lang}" \
     --hf_datadir "${hf_datadir}" \
+    --on_the_fly_feat "${on_the_fly_feat}" \
+    --peft_method "${peft_method}" \
+    --mtl_config "${mtl_config}" \
+    --model_name "${model_name}" \
+    --ds_config "${ds_config}" \
+    --python_hf "${python_hf}" \
+    --normalize_text "${normalize_text}" \
+    --speed_perturb_factors "${speed_perturb_factors}" \
+    --preprocessing_num_proc "${preprocessing_num_proc}" \
+    --inference_nj "${inference_nj}" \
+    --use_gpu_inference "${use_gpu_inference}" \
+    --inference_batch_size "${inference_batch_size}" \
+    --use_asr_prompt "${use_asr_prompt}" \
+    --min_promptless_prob "${min_promptless_prob}" \
+    --max_promptless_prob "${max_promptless_prob}" \
+    --batch_mask_prob "${batch_mask_prob}" \
+    --token_mask_prob "${token_mask_prob}" \
+    --min_alpha "${min_alpha}" \
+    --max_alpha "${max_alpha}" \
+    --dynamic_loss_start_step "${dynamic_loss_start_step}" \
+    --dynamic_loss_k "${dynamic_loss_k}" \
+    --use_asr_prompt_dev "${use_asr_prompt_dev}" \
+    --use_asr_prompt_decode "${use_asr_prompt_decode}" \
+    --promptless_decode "${promptless_decode}" \
+    --disable_asr_inference "${disable_asr_inference}" \
+    --no_glm "${no_glm}" \
+    --num_beams "${num_beams}" \
+    --master_port "${master_port}" \
     --train_set "${train_set}" \
     --mt_train_set "${mt_train_set}" \
     --valid_set "${valid_set}" \

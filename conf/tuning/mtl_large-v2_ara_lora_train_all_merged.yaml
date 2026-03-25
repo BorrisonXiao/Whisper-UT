@@ -1,0 +1,34 @@
+Seq2SeqTrainingArguments:
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 20
+  gradient_accumulation_steps: 1
+  warmup_steps: 500
+  max_steps: 10000
+  learning_rate: 1e-5
+  weight_decay: 5e-4
+  fp16: True
+  predict_with_generate: True
+  generation_max_length: 128
+  logging_steps: 50
+  report_to: ["tensorboard"]
+  evaluation_strategy: "steps"
+  eval_steps: 500
+  save_strategy: "steps"
+  save_steps: 500
+  load_best_model_at_end: False
+  gradient_checkpointing: True
+  save_total_limit: 5
+  metric_for_best_model: "sacrebleu"
+  greater_is_better: True
+  remove_unused_columns: False
+
+LoraConfig:
+  r: 200
+  lora_alpha: 400
+  lora_dropout: 0.1
+  target_modules: ".*(encoder|decoder).*(self_attn|encoder_attn).*(q_proj|k_proj|v_proj|out_proj)|(.*(fc1|fc2).*)|(.*decoder.embed_tokens.*)$"
+
+WhisperConfig:
+  apply_spec_augment: True
+  mask_feature_prob: 0.1
+  mask_time_prob: 0.05
