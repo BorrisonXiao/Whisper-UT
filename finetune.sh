@@ -474,7 +474,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
             opts+=" --use-asr-hyp "
         fi
 
-        if ! "${promptless_decode}" || ! "${use_asr_prompt_decode}" || "${disable_asr_inference}"; then
+        if "${promptless_decode}" || ! "${use_asr_prompt_decode}" || "${disable_asr_inference}"; then
             opts+=" --disable-asr "
         fi
 

@@ -46,6 +46,102 @@ LANGS = {
 }
 
 
+def _filter_required_text_columns(dataset, required_columns, dataset_name):
+    if len(dataset) == 0 or len(required_columns) == 0:
+        return dataset
+
+    original_len = len(dataset)
+    filtered = dataset.filter(
+        lambda *values: all(isinstance(value, str) and len(value.strip()) > 0 for value in values),
+        input_columns=required_columns,
+        desc=f"Filtering invalid rows from {dataset_name}",
+    )
+    dropped = original_len - len(filtered)
+    if dropped > 0:
+        logging.warning(
+            "Dropped %d invalid rows from %s because required fields were empty: %s",
+            dropped,
+            dataset_name,
+            ",".join(required_columns),
+        )
+    return filtered
+
+
+def _validate_required_text_columns(dataset, required_columns, dataset_name, max_examples=5):
+    if len(dataset) == 0 or len(required_columns) == 0:
+        return
+
+    invalid_indices = []
+    invalid_count = 0
+    columns = [dataset[column] for column in required_columns]
+    for idx, values in enumerate(zip(*columns)):
+        if not all(isinstance(value, str) and len(value.strip()) > 0 for value in values):
+            invalid_count += 1
+            if len(invalid_indices) < max_examples:
+                invalid_indices.append(idx)
+
+    if invalid_count > 0:
+        raise ValueError(
+            f"{dataset_name} contains {invalid_count} invalid rows with empty required fields "
+            f"{required_columns}. MT data must provide both source and target text. "
+            f"Example row indices: {invalid_indices}"
+        )
+
+
+def _filter_precomputed_feature_rows(dataset, required_label_columns, tokenizer, dataset_name):
+    if len(dataset) == 0 or len(required_label_columns) == 0:
+        return dataset
+    if any(column not in dataset.column_names for column in required_label_columns):
+        return dataset
+
+    special_ids = set(tokenizer.all_special_ids)
+    original_len = len(dataset)
+    filtered = dataset.filter(
+        lambda *sequences: all(any(token_id not in special_ids for token_id in sequence) for sequence in sequences),
+        input_columns=required_label_columns,
+        desc=f"Filtering cached features from {dataset_name}",
+    )
+    dropped = original_len - len(filtered)
+    if dropped > 0:
+        logging.warning(
+            "Dropped %d invalid cached feature rows from %s because required label columns were empty: %s",
+            dropped,
+            dataset_name,
+            ",".join(required_label_columns),
+        )
+    return filtered
+
+
+def _validate_precomputed_feature_rows(dataset, required_label_columns, tokenizer, dataset_name, max_examples=5):
+    if len(dataset) == 0 or len(required_label_columns) == 0:
+        return
+    if any(column not in dataset.column_names for column in required_label_columns):
+        return
+
+    special_ids = set(tokenizer.all_special_ids)
+    invalid_indices = []
+    invalid_count = 0
+
+    columns = [dataset[column] for column in required_label_columns]
+    for idx, sequences in enumerate(zip(*columns)):
+        valid = True
+        for sequence in sequences:
+            if not sequence or not any(token_id not in special_ids for token_id in sequence):
+                valid = False
+                break
+        if not valid:
+            invalid_count += 1
+            if len(invalid_indices) < max_examples:
+                invalid_indices.append(idx)
+
+    if invalid_count > 0:
+        raise ValueError(
+            f"{dataset_name} contains {invalid_count} invalid cached rows with empty required label columns "
+            f"{required_label_columns}. Cached MT features must provide both source and target labels. "
+            f"Example row indices: {invalid_indices}"
+        )
+
+
 def load_train_and_dev_sets(hf_datadir, train_set, src_lang, tgt_lang, mode="asr", dev_name="dev"):
     src_langs = [src_lang]
     train_dset_dict = {}
@@ -56,6 +152,12 @@ def load_train_and_dev_sets(hf_datadir, train_set, src_lang, tgt_lang, mode="asr
             # text is kept
             train_dset = load_from_disk(str(hf_datadir / f"{lang}.{train_set}"))
             val_dset = load_from_disk(str(hf_datadir / f"{lang}.{dev_name}"))
+            _validate_required_text_columns(
+                train_dset, ["transcript", "translation"], f"{lang}.{train_set}.{mode}"
+            )
+            _validate_required_text_columns(
+                val_dset, ["transcript", "translation"], f"{lang}.{dev_name}.{mode}"
+            )
             train_dset = train_dset.remove_columns([col for col in train_dset.column_names if col not in [
                 "transcript", "translation", "src_lang", "tgt_lang"]])
             # Note that the "transcript" column is kept in case we want to evaluate on ASR at training time
@@ -69,11 +171,20 @@ def load_train_and_dev_sets(hf_datadir, train_set, src_lang, tgt_lang, mode="asr
             # translation will be named as "text" in the returned dataset.
             raw_train_dset = load_from_disk(str(hf_datadir / f"{lang}.{train_set}"))
             raw_val_dset = load_from_disk(str(hf_datadir / f"{lang}.{dev_name}"))
+            asr_train_dset = _filter_required_text_columns(
+                raw_train_dset, ["transcript"], f"{lang}.{train_set}.mtl_asr"
+            )
+            st_train_dset = _filter_required_text_columns(
+                raw_train_dset, ["translation"], f"{lang}.{train_set}.mtl_st"
+            )
+            st_val_dset = _filter_required_text_columns(
+                raw_val_dset, ["translation"], f"{lang}.{dev_name}.mtl_st"
+            )
             # Rename the "transcript" column to "text" for the ASR task
-            asr_train_dset = raw_train_dset.rename_column("transcript", "text")
+            asr_train_dset = asr_train_dset.rename_column("transcript", "text")
             # Rename the "translation" column to "text" for the ST task
-            st_train_dset = raw_train_dset.rename_column("translation", "text")
-            st_val_dset = raw_val_dset.rename_column("translation", "text")
+            st_train_dset = st_train_dset.rename_column("translation", "text")
+            st_val_dset = st_val_dset.rename_column("translation", "text")
             # Remove the "translation" column for the ASR task
             asr_train_dset = asr_train_dset.remove_columns([col for col in asr_train_dset.column_names if col not in [
                 "audio", "text", "src_lang", "tgt_lang"]])
@@ -93,6 +204,12 @@ def load_train_and_dev_sets(hf_datadir, train_set, src_lang, tgt_lang, mode="asr
             print(f"Loaded validation set from {hf_datadir / f'{lang}.{dev_name}'}")
             train_dset = load_from_disk(str(hf_datadir / f"{lang}.{train_set}"))
             print(f"Loaded training set from {hf_datadir / f'{lang}.{train_set}'}")
+            train_dset = _filter_required_text_columns(
+                train_dset, ["transcript", "translation"], f"{lang}.{train_set}.{mode}"
+            )
+            val_dset = _filter_required_text_columns(
+                val_dset, ["transcript", "translation"], f"{lang}.{dev_name}.{mode}"
+            )
             train_dset = train_dset.remove_columns([col for col in train_dset.column_names if col not in [
                 "audio", "transcript", "translation", "src_lang", "tgt_lang"]])
             # Note that the "transcript" column is kept in case we want to evaluate on ASR at training time
@@ -117,6 +234,12 @@ def load_train_and_dev_sets(hf_datadir, train_set, src_lang, tgt_lang, mode="asr
                 # For ASR, we only need the transcript
                 train_dset = load_from_disk(str(hf_datadir / f"{lang}.{train_set}"))
                 val_dset = load_from_disk(str(hf_datadir / f"{lang}.{dev_name}"))
+                train_dset = _filter_required_text_columns(
+                    train_dset, ["transcript"], f"{lang}.{train_set}.asr"
+                )
+                val_dset = _filter_required_text_columns(
+                    val_dset, ["transcript"], f"{lang}.{dev_name}.asr"
+                )
                 # Rename the "transcript" column to "text"
                 train_dset = train_dset.rename_column("transcript", "text")
                 val_dset = val_dset.rename_column("transcript", "text")
@@ -131,6 +254,12 @@ def load_train_and_dev_sets(hf_datadir, train_set, src_lang, tgt_lang, mode="asr
             # For ST, we only need the translation
             train_dset = load_from_disk(str(hf_datadir / f"{lang}.{train_set}"))
             val_dset = load_from_disk(str(hf_datadir / f"{lang}.{dev_name}"))
+            train_dset = _filter_required_text_columns(
+                train_dset, ["translation"], f"{lang}.{train_set}.st"
+            )
+            val_dset = _filter_required_text_columns(
+                val_dset, ["translation"], f"{lang}.{dev_name}.st"
+            )
             # Rename the "translation" column to "text"
             train_dset = train_dset.rename_column("translation", "text")
             val_dset = val_dset.rename_column("translation", "text")
@@ -165,6 +294,8 @@ def prepare_dataset(
     processed_dset_dict = {}
     for _lang, dset in dset_dict.items():
         lang, mode = _lang.split("_")
+        required_label_columns = ["labels_src", "labels_tgt"] if mode in [
+            "pmtl", "mml", "mt", "umt"] else ["labels"]
         # If the features are already extracted, load them directly
         if save_feature_dir is not None and (save_feature_dir / f"{lang}.{dset_type}.{mode}").exists():
             if not train:
@@ -172,8 +303,25 @@ def prepare_dataset(
                 continue
             logging.info(
                 f"Found precomputed features, loading from {save_feature_dir / f'{lang}.{dset_type}.{mode}'}")
+            cached_processor = WhisperProcessor.from_pretrained(
+                f"openai/whisper-{model_name}"
+            )
             processed_dset = load_from_disk(
                 str(save_feature_dir / f"{lang}.{dset_type}.{mode}"))
+            if mode in ["mt", "umt"]:
+                _validate_precomputed_feature_rows(
+                    processed_dset,
+                    required_label_columns,
+                    cached_processor.tokenizer,
+                    str(save_feature_dir / f"{lang}.{dset_type}.{mode}"),
+                )
+            else:
+                processed_dset = _filter_precomputed_feature_rows(
+                    processed_dset,
+                    required_label_columns,
+                    cached_processor.tokenizer,
+                    str(save_feature_dir / f"{lang}.{dset_type}.{mode}"),
+                )
             processed_dset_list.append(processed_dset)
             processed_dset_dict[_lang] = processed_dset
         else:

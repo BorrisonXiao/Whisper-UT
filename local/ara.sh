@@ -15,8 +15,10 @@ dev_sr_stms="${scale23_data_root}/${src_lang}/sr.${src_lang}-${src_lang}.dev1.st
 dev_st_stms="${scale23_data_root}/${src_lang}/st.${src_lang}-${tgt_lang}.dev1.stm ${scale23_data_root}/${src_lang}/st.${src_lang}-${tgt_lang}.dev2.stm"
 test_sr_stms="${scale23_data_root}/${src_lang}/testsets/cts/sr.${src_lang}-${src_lang}.iwslt22.test.stm"
 test_st_stms="${scale23_data_root}/${src_lang}/testsets/cts/st.${src_lang}-${tgt_lang}.iwslt22.test.stm"
+contrastive_ratios="1 0 0"
 stage=1
 stop_stage=2
+allow_gap=false
 
 exec bash "${script_dir}/data.sh" \
     --src_lang "${src_lang}" \
@@ -28,6 +30,8 @@ exec bash "${script_dir}/data.sh" \
     --dev_st_stms "${dev_st_stms}" \
     --test_sr_stms "${test_sr_stms}" \
     --test_st_stms "${test_st_stms}" \
+    --contrastive_ratios "${contrastive_ratios}" \
     --stage "${stage}" \
     --stop_stage "${stop_stage}" \
+    --allow_gap "${allow_gap}" \
     "$@"

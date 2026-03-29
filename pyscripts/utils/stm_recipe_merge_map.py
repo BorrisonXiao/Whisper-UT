@@ -68,7 +68,8 @@ def parse_args():
     parser.add_argument("--std", type=float, default=7.0)
     parser.add_argument("--t-min", type=float, default=5.0)
     parser.add_argument("--t-max", type=float, default=25.0)
-    parser.add_argument("--ratios", nargs=3, type=float, default=[0.5, 0.25, 0.25])
+    parser.add_argument("--ratios", nargs=3, type=float, default=[1.0, 0.0, 0.0])
+    parser.add_argument("--allow-gap", type=str, default="false")
     return parser.parse_args()
 
 
@@ -179,7 +180,26 @@ def merged_uttid(example_group: Sequence[SegmentExample]) -> str:
     return f"merged-{recording_id}-{first.channel}_{first.start_ms:08d}_{last.stop_ms:08d}"
 
 
-def serialize_record(example_group: Sequence[SegmentExample], dataset_name: str, supervision_mode: str, src_lang: str, tgt_lang: str):
+def parse_bool(value: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}
+
+
+def merged_duration(example_group: Sequence[SegmentExample], allow_gap: bool) -> float:
+    if allow_gap:
+        return max(0.0, example_group[-1].stop_time - example_group[0].start_time)
+    return sum(example.duration for example in example_group)
+
+
+def serialize_record(
+    example_group: Sequence[SegmentExample],
+    dataset_name: str,
+    supervision_mode: str,
+    src_lang: str,
+    tgt_lang: str,
+    allow_gap: bool,
+):
     first = example_group[0]
     last = example_group[-1]
     transcript = " ".join(example.transcript for example in example_group if example.transcript).strip()
@@ -202,7 +222,7 @@ def serialize_record(example_group: Sequence[SegmentExample], dataset_name: str,
         "speaker": first.speaker,
         "start_time": first.start_time,
         "stop_time": last.stop_time,
-        "duration": max(0.0, last.stop_time - first.start_time),
+        "duration": merged_duration(example_group, allow_gap),
         "transcript": transcript,
         "translation": translation,
         "source_datasets": sorted({example.source_dataset for example in example_group}),
@@ -233,6 +253,7 @@ def build_merged_training_records(
     std: float,
     t_min: float,
     t_max: float,
+    allow_gap: bool,
 ) -> List[dict]:
     rng = random.Random(seed)
     grouped: Dict[Tuple[str, str], List[SegmentExample]] = defaultdict(list)
@@ -249,7 +270,14 @@ def build_merged_training_records(
         for example in group:
             if bucket and bucket_duration + example.duration > bucket_target:
                 merged_records.append(
-                    serialize_record(bucket, MERGED_DATASET_NAMES["3way"], "3way", src_lang, tgt_lang)
+                    serialize_record(
+                        bucket,
+                        MERGED_DATASET_NAMES["3way"],
+                        "3way",
+                        src_lang,
+                        tgt_lang,
+                        allow_gap,
+                    )
                 )
                 bucket = []
                 bucket_duration = 0.0
@@ -260,7 +288,14 @@ def build_merged_training_records(
 
         if bucket:
             merged_records.append(
-                serialize_record(bucket, MERGED_DATASET_NAMES["3way"], "3way", src_lang, tgt_lang)
+                serialize_record(
+                    bucket,
+                    MERGED_DATASET_NAMES["3way"],
+                    "3way",
+                    src_lang,
+                    tgt_lang,
+                    allow_gap,
+                )
             )
 
     return merged_records
@@ -378,6 +413,7 @@ def collect_pairs(sr_paths: Sequence[str], st_paths: Sequence[str], split: str) 
 def main():
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    allow_gap = parse_bool(args.allow_gap)
 
     train_examples = combine_training_examples(
         collect_pairs(args.train_sr_stms, args.train_st_stms, "train")
@@ -394,6 +430,7 @@ def main():
         std=args.std,
         t_min=args.t_min,
         t_max=args.t_max,
+        allow_gap=allow_gap,
     )
     training_outputs = split_training_records(merged_training, args.ratios, args.seed)
     passthrough_outputs = build_passthrough_records(dev_examples + test_examples, args.src_lang, args.tgt_lang)
@@ -413,6 +450,7 @@ def main():
             "t_min": args.t_min,
             "t_max": args.t_max,
         },
+        "allow_gap": allow_gap,
         "ratios": normalize_ratios(args.ratios),
         "counts": {
             "train_input_segments": len(train_examples),

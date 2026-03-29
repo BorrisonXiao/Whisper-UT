@@ -38,12 +38,19 @@ def parse_args():
     parser.add_argument("--num-workers", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--sampling-rate", type=int, default=16000)
     parser.add_argument("--audio-format", type=str, default="flac")
+    parser.add_argument("--allow-gap", type=str, default="false")
     return parser.parse_args()
 
 
 def load_manifest(path: Path) -> List[dict]:
     with open(path, "r", encoding="utf-8") as fin:
         return [json.loads(line) for line in fin if line.strip()]
+
+
+def parse_bool(value: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
 def channel_to_index(channel: str) -> int:
@@ -111,28 +118,37 @@ def resample_audio(audio_array: np.ndarray, source_sr: int, target_sr: int) -> n
     return resampled
 
 
-def materialize_record(task: Tuple[int, dict, str, int, str]):
-    index, record, dataset_audio_dir, target_sr, audio_format = task
+def materialize_record(task: Tuple[int, dict, str, int, str, bool]):
+    index, record, dataset_audio_dir, target_sr, audio_format, allow_gap = task
     dataset_audio_dir = Path(dataset_audio_dir)
     dataset_audio_dir.mkdir(parents=True, exist_ok=True)
     output_audio_path = dataset_audio_dir / f"{record['uttid']}.{audio_format}"
 
     if not output_audio_path.exists():
-        audio_segments = []
-        for segment in record["segments"]:
-            audio_array, _ = load_audio_segment(
+        if allow_gap:
+            merged_audio, _ = load_audio_segment(
                 audio_path=record["audio_path"],
                 channel=record["channel"],
-                start_time=segment["start_time"],
-                stop_time=segment["stop_time"],
+                start_time=float(record["start_time"]),
+                stop_time=float(record["stop_time"]),
                 target_sr=target_sr,
             )
-            audio_segments.append(audio_array)
+        else:
+            audio_segments = []
+            for segment in record["segments"]:
+                audio_array, _ = load_audio_segment(
+                    audio_path=record["audio_path"],
+                    channel=record["channel"],
+                    start_time=segment["start_time"],
+                    stop_time=segment["stop_time"],
+                    target_sr=target_sr,
+                )
+                audio_segments.append(audio_array)
 
-        if not audio_segments:
-            raise ValueError(f"No audio segments found for {record['uttid']}")
+            if not audio_segments:
+                raise ValueError(f"No audio segments found for {record['uttid']}")
 
-        merged_audio = audio_segments[0] if len(audio_segments) == 1 else np.concatenate(audio_segments)
+            merged_audio = audio_segments[0] if len(audio_segments) == 1 else np.concatenate(audio_segments)
         sf.write(output_audio_path, merged_audio, target_sr)
 
     return {
@@ -219,6 +235,7 @@ def save_summary(summary: Dict[str, int], path: Path):
 
 def main():
     args = parse_args()
+    allow_gap = parse_bool(args.allow_gap)
     args.audio_dir.mkdir(parents=True, exist_ok=True)
     args.stm_dir.mkdir(parents=True, exist_ok=True)
     args.hf_dir.mkdir(parents=True, exist_ok=True)
@@ -238,7 +255,7 @@ def main():
         )
 
         tasks = [
-            (index, record, str(dataset_audio_dir), args.sampling_rate, args.audio_format)
+            (index, record, str(dataset_audio_dir), args.sampling_rate, args.audio_format, allow_gap)
             for index, record in enumerate(records)
         ]
         with ProcessPoolExecutor(max_workers=max(1, args.num_workers)) as executor:

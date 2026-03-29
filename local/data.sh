@@ -31,9 +31,39 @@ dev_sr_stms=
 dev_st_stms=
 test_sr_stms=
 test_st_stms=
-contrastive_ratios="0.5 0.25 0.25"
+contrastive_ratios="1 0 0"
+allow_gap=false
+
+help_message=$(
+    cat <<EOF
+Usage: $0 [options]
+
+Key options:
+  --src_lang LANG
+  --tgt_lang LANG
+  --train_sr_stms "SR1 [SR2 ...]"
+  --train_st_stms "ST1 [ST2 ...]"
+  --dev_sr_stms "SR1 [SR2 ...]"
+  --dev_st_stms "ST1 [ST2 ...]"
+  --test_sr_stms "SR1 [SR2 ...]"
+  --test_st_stms "ST1 [ST2 ...]"
+  --allow_gap true|false
+
+When --allow_gap=false (default), merged segments are concatenated back-to-back and
+middle gaps are discarded. When --allow_gap=true, stage 2 preserves the original
+recording span between the first start and final end.
+
+The training split is currently fixed to 1:0:0, so only 3-way training data is
+materialized. ASR-only and ST-only outputs are disabled for now.
+EOF
+)
 
 . "${repo_root}/utils/parse_options.sh"
+
+if [ "${contrastive_ratios}" != "1 0 0" ]; then
+    log "Ignoring requested contrastive_ratios='${contrastive_ratios}'; data prep is currently fixed to 1:0:0."
+fi
+contrastive_ratios="1 0 0"
 
 if [ -z "${output_root}" ]; then
     output_root="${WHISPER_UT_DATA_ROOT:-${repo_root}/data}/${src_lang}"
@@ -104,7 +134,8 @@ if [ "${stage}" -le 1 ] && [ "${stop_stage}" -ge 1 ]; then
         --std "${std}" \
         --t-min "${t_min}" \
         --t-max "${t_max}" \
-        --ratios ${contrastive_ratios}
+        --ratios ${contrastive_ratios} \
+        --allow-gap "${allow_gap}"
 fi
 
 if [ "${stage}" -le 2 ] && [ "${stop_stage}" -ge 2 ]; then
@@ -118,7 +149,8 @@ if [ "${stage}" -le 2 ] && [ "${stop_stage}" -ge 2 ]; then
         --tgt-lang "${tgt_lang}" \
         --num-workers "${num_workers}" \
         --sampling-rate "${sampling_rate}" \
-        --audio-format "${audio_format}"
+        --audio-format "${audio_format}" \
+        --allow-gap "${allow_gap}"
 fi
 
 log "Finished STM-first data preparation for ${src_lang}-${tgt_lang}."
