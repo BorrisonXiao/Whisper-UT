@@ -40,6 +40,7 @@ num_beams=1
 prepare_keyfiles=true
 force_rebuild_keyfiles=false
 inference_checkpoint=
+expdir="${repo_root}/exp"
 stage=0
 stop_stage=3
 st_tag=iwslt22
@@ -81,6 +82,7 @@ Wrapper options:
   --prepare_keyfiles true|false
   --force_rebuild_keyfiles true|false
   --inference_checkpoint NAME
+  --expdir PATH
   --conda_env NAME
   --python PYTHON
   --stage INT
@@ -97,9 +99,10 @@ Stages:
   3: ST evaluation via score_hf_predictions.py
 
 Layout defaults:
-  - training model/checkpoints: <output_dir>
-  - decoded hypotheses:        <output_dir>/decode/<dataset>/text
-  - eval outputs:              <output_dir>/scores/<dataset>/
+  - st_exp:                    <expdir>/hf_<st_tag>
+  - training model/checkpoints: <st_exp>/<src_lang>/<train_set>/st/<peft_method>
+  - decoded hypotheses:        <st_exp>/<src_lang>/decode/<train_set>/<dataset>/st/<peft_method>/org_org/text
+  - eval outputs:              <expdir>/scores/st/e2e_st/hf_whisper_<model_name>/<src_lang>/<peft_method>/<train_set>/org_org/<dataset>/
 
 All other --name value pairs are forwarded to hf_whisper_ft.py for stages 0-1.
 EOF
@@ -123,7 +126,7 @@ while [ $# -gt 0 ]; do
             printf '%s\n' "${help_message}"
             exit 0
             ;;
-        --hf_datadir|--src_lang|--tgt_lang|--train_set|--valid_set|--test_sets|--on_the_fly_feat|--peft_method|--st_config|--model_name|--ds_config|--python_hf|--normalize_text|--speed_perturb_factors|--preprocessing_num_proc|--master_port|--ngpu|--inference_batch_size|--use_gpu_inference|--num_beams|--prepare_keyfiles|--force_rebuild_keyfiles|--inference_checkpoint|--conda_env|--python|--stage|--stop_stage|--st_tag|--output_dir|--decode_dir_base|--score_dir_base)
+        --hf_datadir|--src_lang|--tgt_lang|--train_set|--valid_set|--test_sets|--on_the_fly_feat|--peft_method|--st_config|--model_name|--ds_config|--python_hf|--normalize_text|--speed_perturb_factors|--preprocessing_num_proc|--master_port|--ngpu|--inference_batch_size|--use_gpu_inference|--num_beams|--prepare_keyfiles|--force_rebuild_keyfiles|--inference_checkpoint|--expdir|--conda_env|--python|--stage|--stop_stage|--st_tag|--output_dir|--decode_dir_base|--score_dir_base)
             require_arg "$1" "${2:-}"
             name=${1#--}
             name=${name//-/_}
@@ -190,14 +193,18 @@ fi
 save_feature_dir="${hf_datadir}/features/${feat_type}"
 mkdir -p "${hf_datadir}" "${save_feature_dir}"
 
+st_exp="${expdir}/hf_${st_tag}"
+train_suf="/merged"
+decode_suf="_org"
+
 if [ -z "${output_dir}" ]; then
-    output_dir="${repo_root}/exp/hf_${st_tag}/${src_lang}/${train_set}/st/${peft_method}"
+    output_dir="${st_exp}/${src_lang}/${train_set}/st/${peft_method}"
 fi
 if [ -z "${decode_dir_base}" ]; then
-    decode_dir_base="${output_dir}/decode"
+    decode_dir_base="${st_exp}/${src_lang}/decode/${train_set}"
 fi
 if [ -z "${score_dir_base}" ]; then
-    score_dir_base="${output_dir}/scores"
+    score_dir_base="${expdir}/scores"
 fi
 mkdir -p "${output_dir}" "${decode_dir_base}" "${score_dir_base}"
 
@@ -274,7 +281,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     for dset in ${test_sets}; do
         validate_dataset_dir "${dset}"
         key_file=$(ensure_keyfile_for_set "${dset}")
-        decode_dir="${decode_dir_base}/${dset}"
+        decode_dir="${decode_dir_base}/${dset}/st/${peft_method}${train_suf}${decode_suf}"
         mkdir -p "${decode_dir}"
 
         infer_args=(
@@ -308,13 +315,13 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     log "Stage 3: ST evaluation on decoded outputs"
     for dset in ${test_sets}; do
         validate_dataset_dir "${dset}"
-        hyp_file="${decode_dir_base}/${dset}/text"
+        hyp_file="${decode_dir_base}/${dset}/st/${peft_method}${train_suf}${decode_suf}/text"
         if [ ! -f "${hyp_file}" ]; then
             log "Error: missing decoded hypothesis file: ${hyp_file}"
             log "Run with --stage 2 first (or include stage 2 in this run)."
             exit 2
         fi
-        score_dir="${score_dir_base}/${dset}"
+        score_dir="${score_dir_base}/st/e2e_st/hf_whisper_${model_name}/${src_lang}/${peft_method}/${train_set}${train_suf}${decode_suf}/${dset}"
         score_args=(
             "${repo_root}/pyscripts/utils/score_hf_predictions.py"
             --dataset "${hf_datadir}/${src_lang}.${dset}"
@@ -330,4 +337,4 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     done
 fi
 
-log "Done. model=${output_dir}, decode=${decode_dir_base}, scores=${score_dir_base}"
+log "Done. expdir=${expdir}, model=${output_dir}, decode=${decode_dir_base}, scores=${score_dir_base}"
