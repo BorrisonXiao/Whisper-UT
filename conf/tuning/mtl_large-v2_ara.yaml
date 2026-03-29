@@ -23,8 +23,8 @@ Seq2SeqTrainingArguments:
   remove_unused_columns: False
 
 LoraConfig:
-  r: 200
-  lora_alpha: 400
+  r: 128
+  lora_alpha: 256
   lora_dropout: 0.1
   target_modules: ".*(encoder|decoder).*(self_attn|encoder_attn).*(q_proj|k_proj|v_proj|out_proj)|(.*(fc1|fc2).*)|(.*decoder.embed_tokens.*)$"
 
