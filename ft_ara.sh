@@ -17,23 +17,26 @@ python=python
 src_lang=ara
 tgt_lang=eng
 
-default_hf_datadir="${workspace_root}/ut_data/${src_lang}/hf"
-if [ -d "${default_hf_datadir}" ]; then
-    hf_datadir="${default_hf_datadir}"
-else
-    hf_datadir="${WHISPER_UT_DATA_ROOT:-${workspace_root}/ut_data}/${src_lang}/hf"
-fi
+# default_hf_datadir="${workspace_root}/ut_data/${src_lang}/hf"
+# if [ -d "${default_hf_datadir}" ]; then
+#     hf_datadir="${default_hf_datadir}"
+# else
+#     hf_datadir="${WHISPER_UT_DATA_ROOT:-${workspace_root}/ut_data}/${src_lang}/hf"
+# fi
+
+hf_datadir="/exp/cxiao/ut_data/amir_ara"
+st_exp="exp/iwslt22_amir"
 
 train_set=train_3way_merged
-mt_train_set=train_3way_merged
+mt_train_set=concat_3way_mt
 valid_set=dev1_org
-test_sets="dev2_org iwslt22_test_org"
+test_sets="iwslt22_test_org"
 
 prepare_keyfiles=true
 force_rebuild_keyfiles=false
 on_the_fly_feat=true
 peft_method=lora
-mtl_config=conf/tuning/mtl_large-v2_ara_lora_train_all_merged.yaml
+mtl_config=conf/tuning/mtl_large-v2_ara.yaml
 model_name=large-v2
 ds_config=conf/tuning/ds2.json
 python_hf=python3
@@ -60,7 +63,7 @@ no_glm=true
 num_beams=1
 master_port=29501
 
-stage=0
+stage=1
 stop_stage=7
 st_tag=iwslt22
 ngpu=8
@@ -226,6 +229,7 @@ bash "${repo_root}/finetune.sh" \
     --src_lang "${src_lang}" \
     --tgt_lang "${tgt_lang}" \
     --hf_datadir "${hf_datadir}" \
+    --st_exp "${st_exp}" \
     --on_the_fly_feat "${on_the_fly_feat}" \
     --peft_method "${peft_method}" \
     --mtl_config "${mtl_config}" \

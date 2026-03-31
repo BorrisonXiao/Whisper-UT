@@ -395,12 +395,26 @@ class WhisperTokenizerFast(PreTrainedTokenizerFast):
     @property
     # Copied from transformers.models.whisper.tokenization_whisper.WhisperTokenizer.prefix_tokens
     def prefix_tokens(self) -> List[int]:
-        all_special_ids = self.all_special_ids
-        bos_token_id = all_special_ids[-106]
-        translate_token_id = all_special_ids[-6]
-        transcribe_token_id = all_special_ids[-5]
-        notimestamps_token_id = all_special_ids[-1]
-        langs = tuple(LANGUAGES.keys())
+        # Resolve prompt tokens by token string, not by special-token list position.
+        # Position-based indexing is brittle when extra special tokens are introduced
+        # (e.g., setting a mask token in downstream training code).
+        vocab = self.get_vocab()
+        required_tokens = [
+            "<|startoftranscript|>",
+            "<|translate|>",
+            "<|transcribe|>",
+            "<|notimestamps|>",
+        ]
+        missing_tokens = [tok for tok in required_tokens if tok not in vocab]
+        if len(missing_tokens) > 0:
+            raise ValueError(
+                f"Missing required Whisper special tokens: {missing_tokens}"
+            )
+
+        bos_token_id = vocab["<|startoftranscript|>"]
+        translate_token_id = vocab["<|translate|>"]
+        transcribe_token_id = vocab["<|transcribe|>"]
+        notimestamps_token_id = vocab["<|notimestamps|>"]
 
         if self.language is not None:
             self.language = self.language.lower()
@@ -421,7 +435,12 @@ class WhisperTokenizerFast(PreTrainedTokenizerFast):
 
         bos_sequence = [bos_token_id]
         if self.language is not None:
-            bos_sequence.append(bos_token_id + 1 + langs.index(language_id))
+            lang_token = f"<|{language_id}|>"
+            if lang_token not in vocab:
+                raise ValueError(
+                    f"Language token not found in tokenizer vocabulary: {lang_token}"
+                )
+            bos_sequence.append(vocab[lang_token])
         if self.task is not None:
             bos_sequence.append(transcribe_token_id if self.task == "transcribe" else translate_token_id)
         if not self.predict_timestamps:

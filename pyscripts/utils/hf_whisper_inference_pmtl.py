@@ -8,8 +8,9 @@
 #     print(dist.project_name.replace('Python', ''))
 # import sys; print(sys.executable)
 
-from whisper_st.processing_whisper import WhisperProcessor
 from whisper_st.modeling_whisper import WhisperForConditionalGeneration
+from whisper_st.feature_extraction_whisper import WhisperFeatureExtractor
+from whisper_st.tokenization_whisper import WhisperTokenizer
 import argparse
 from pathlib import Path
 from tqdm import tqdm
@@ -34,6 +35,32 @@ LANGS = {
     "fr": "french",
     "de": "german",
 }
+
+
+class LocalWhisperProcessor:
+    """Lightweight decode-time processor wrapper using local whisper_st classes."""
+
+    def __init__(self, feature_extractor, tokenizer):
+        self.feature_extractor = feature_extractor
+        self.tokenizer = tokenizer
+
+    def __call__(self, audio, sampling_rate=None, **kwargs):
+        return self.feature_extractor(audio, sampling_rate=sampling_rate, **kwargs)
+
+    def batch_decode(self, *args, **kwargs):
+        return self.tokenizer.batch_decode(*args, **kwargs)
+
+    def get_decoder_prompt_ids(self, task=None, language=None, no_timestamps=True):
+        return self.tokenizer.get_decoder_prompt_ids(
+            task=task, language=language, no_timestamps=no_timestamps
+        )
+
+
+def _load_local_whisper_processor(model_path):
+    """Force local whisper_st tokenizer/feature extractor classes at decode time."""
+    feature_extractor = WhisperFeatureExtractor.from_pretrained(model_path)
+    tokenizer = WhisperTokenizer.from_pretrained(model_path, use_fast=False)
+    return LocalWhisperProcessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
 
 def _prepare_input(data: Union[torch.Tensor, Any], device="cpu") -> Union[torch.Tensor, Any]:
@@ -145,18 +172,18 @@ def inference(
         print(f"Loading base model from {peft_config.base_model_name_or_path}")
         model = WhisperForConditionalGeneration.from_pretrained(
             peft_config.base_model_name_or_path).to(device)
-        processor = WhisperProcessor.from_pretrained(peft_model)
+        processor = _load_local_whisper_processor(peft_model)
         model = PeftModel.from_pretrained(model, peft_model)
     else:
         if pretrained_model is not None:
             print(f"Loading pretrained model from {pretrained_model}")
-            processor = WhisperProcessor.from_pretrained(pretrained_model)
+            processor = _load_local_whisper_processor(pretrained_model)
             model = WhisperForConditionalGeneration.from_pretrained(
                 pretrained_model).to(device)
         else:
             print(
                 f"Loading model from huggingface openai/whisper-{model_name}")
-            processor = WhisperProcessor.from_pretrained(
+            processor = _load_local_whisper_processor(
                 f"openai/whisper-{model_name}")
             model = WhisperForConditionalGeneration.from_pretrained(
                 f"openai/whisper-{model_name}").to(device)

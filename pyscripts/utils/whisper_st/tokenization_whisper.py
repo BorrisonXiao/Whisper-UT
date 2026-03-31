@@ -410,17 +410,27 @@ class WhisperTokenizer(PreTrainedTokenizer):
 
     @property
     def prefix_tokens(self) -> List[int]:
-        # Keeps track of the difference of vocab size between the original vocab (51865)
-        # and the updated vocab size (if any) to adjust the special token ids accordingly
-        # Note that the new vocab_size should include the special tokens
-        diff = max(len(self.get_vocab()) - 51865, 0)
-        all_special_ids = self.all_special_ids
-        bos_token_id = all_special_ids[-106 - diff]
-        translate_token_id = all_special_ids[-6 - diff]
-        transcribe_token_id = all_special_ids[-5 - diff]
-        bmtl_token_id = self.get_vocab(
-        )['<|bmtl|>'] if '<|bmtl|>' in self.get_vocab() else None
-        notimestamps_token_id = all_special_ids[-1 - diff]
+        # Resolve prompt tokens by token string, not by special-token list position.
+        # Position-based indexing is brittle when extra special tokens are introduced
+        # (e.g., setting a mask token in downstream training code).
+        vocab = self.get_vocab()
+        required_tokens = [
+            "<|startoftranscript|>",
+            "<|translate|>",
+            "<|transcribe|>",
+            "<|notimestamps|>",
+        ]
+        missing_tokens = [tok for tok in required_tokens if tok not in vocab]
+        if len(missing_tokens) > 0:
+            raise ValueError(
+                f"Missing required Whisper special tokens: {missing_tokens}"
+            )
+
+        bos_token_id = vocab["<|startoftranscript|>"]
+        translate_token_id = vocab["<|translate|>"]
+        transcribe_token_id = vocab["<|transcribe|>"]
+        bmtl_token_id = vocab['<|bmtl|>'] if '<|bmtl|>' in vocab else None
+        notimestamps_token_id = vocab["<|notimestamps|>"]
 
         if self.language is not None:
             self.language = self.language.lower()
@@ -442,8 +452,12 @@ class WhisperTokenizer(PreTrainedTokenizer):
 
         bos_sequence = [bos_token_id]
         if self.language is not None:
-            # To accomodate for the newly added languages
-            lang_token_id = self.get_vocab()[f'<|{language_id}|>']
+            lang_token = f'<|{language_id}|>'
+            if lang_token not in vocab:
+                raise ValueError(
+                    f"Language token not found in tokenizer vocabulary: {lang_token}"
+                )
+            lang_token_id = vocab[lang_token]
             bos_sequence.append(lang_token_id)
         if self.task is not None:
             bos_sequence.append(transcribe_token_id if self.task ==
